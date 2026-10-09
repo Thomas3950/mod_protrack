@@ -8,6 +8,7 @@ local logger                    = require("forgeutils.logger").Get("ProTrackUtil
 local Vector3                   = require("Vector3")
 local TransformQ                = require("TransformQ")
 local Quaternion                = require("Quaternion")
+local Diag                      = require("protrack.diagnostics")
 
 ---@class TrackOrigin
 ---@field transform any The transform of the middle of the train.
@@ -28,6 +29,11 @@ local function getUpperBoundOfTrainSize(worldApi, trainType, targetNumCars)
     local currentNumCars = 0
     local length = 0
     while (currentNumCars ~= targetNumCars) do
+        if length > 1000 then
+            Diag.Log("WARN", "Train: no length up to 1000 m fits " .. global.tostring(targetNumCars)
+                .. " cars (game answered " .. global.tostring(currentNumCars) .. ")")
+            return length
+        end
         currentNumCars = worldApi.trackedrides:LimitNumberOfCarsByTrainLength(trainType, targetNumCars, length)
         length = length + 5
     end
@@ -45,10 +51,59 @@ local function getLowerBoundOfTrainSize(worldApi, trainType, targetNumCars, star
     local currentNumCars = targetNumCars
     local length = startingLength
     while (targetNumCars == currentNumCars) do
+        if length <= 0 then
+            Diag.Log("WARN", "Train: car count never dropped while shortening, using " .. global.tostring(startingLength) .. " m")
+            return startingLength
+        end
         length = length - 0.1
         currentNumCars = worldApi.trackedrides:LimitNumberOfCarsByTrainLength(trainType, currentNumCars, length)
     end
     return length
+end
+
+---Returns the train length from the game's train settings, or nil when this game
+---version doesn't have the functions it needs (GetNumCarsPerTrain is missing in some).
+---@param worldAPI WorldAPIs
+---@param rideHolder any
+---@return number?
+local function GetTrainLengthFromSettings(worldAPI, rideHolder)
+    if global.type(api.track.GetNumCarsPerTrain) ~= "function"
+        or global.type(api.track.GetMinMaxCarsPerTrain) ~= "function"
+        or global.type(worldAPI.trackedrides.LimitNumberOfCarsByTrainLength) ~= "function" then
+        return nil
+    end
+
+    local sTrainType = api.track.GetTrainType(rideHolder)
+    local numTrainCars = api.track.GetNumCarsPerTrain(rideHolder)
+    local _, max = api.track.GetMinMaxCarsPerTrain(rideHolder)
+    numTrainCars = global.math.min(numTrainCars, max)
+
+    Diag.Step("Train: measure the train (" .. global.tostring(sTrainType) .. ", " .. global.tostring(numTrainCars) .. " cars)")
+    local upperBound = getUpperBoundOfTrainSize(worldAPI, sTrainType, numTrainCars)
+    return getLowerBoundOfTrainSize(worldAPI, sTrainType, numTrainCars, upperBound)
+end
+
+---Measures the train from its cars' front positions, like the Dec 2025 build:
+---the gaps between consecutive cars, plus one more gap for the last car.
+---A single car measures 0 m (front, middle and back readouts are then the same point).
+---@param trackTransforms any[] The cars' front track locations, front car first.
+---@return number
+local function MeasureTrainLength(trackTransforms)
+    local length = 0
+    local lastGap = 0
+    local previousPos = nil
+    for _, trackTransform in global.ipairs(trackTransforms) do
+        local locationTransform = trackTransform:GetLocationTransform()
+        if locationTransform ~= nil then
+            local pos = locationTransform:GetPos()
+            if previousPos ~= nil then
+                lastGap = Vector3.Length(pos - previousPos)
+                length = length + lastGap
+            end
+            previousPos = pos
+        end
+    end
+    return length + lastGap
 end
 
 --- Returns the current track origin data of a ride.
@@ -63,20 +118,18 @@ function Utils.GetFirstCarData(rideID)
         return nil
     end
 
+    Diag.Step("Train: read the train settings")
     ---@diagnostic disable-next-line: param-type-mismatch
     local rideHolder = api.track.GetTrackHolder(rideID)
 
-    local sTrainType = api.track.GetTrainType(rideHolder)
-
-    local numTrainCars = api.track.GetNumCarsPerTrain(rideHolder)
-    local _, max = api.track.GetMinMaxCarsPerTrain(rideHolder)
-    numTrainCars = global.math.min(numTrainCars, max)
-
-    local upperBound = getUpperBoundOfTrainSize(worldAPI, sTrainType, numTrainCars)
-    local trainLength = getLowerBoundOfTrainSize(worldAPI, sTrainType, numTrainCars, upperBound)
+    local trainLength = GetTrainLengthFromSettings(worldAPI, rideHolder)
+    if trainLength ~= nil then
+        Diag.Log("INFO", "Train: length " .. global.tostring(trainLength) .. " m (from the train settings)")
+    end
 
     local trainID = tTrains[1]
     if trainID ~= nil and trainID ~= 0 then
+        Diag.Step("Train: read the car positions")
         local tCars = worldAPI.trackedrides:GetCarsInTrain(trainID)
         if tCars ~= nil then
             -- Print for debugging
@@ -114,7 +167,14 @@ function Utils.GetFirstCarData(rideID)
                 return nil
             end
 
+            if trainLength == nil then
+                trainLength = MeasureTrainLength(trackTransforms)
+                Diag.Log("INFO", "Train: length " .. global.tostring(trainLength) .. " m (measured from "
+                    .. #trackTransforms .. " car positions)")
+            end
+
             -- Handle camera
+            Diag.Step("Train: find the front camera")
             ---@diagnostic disable-next-line: param-type-mismatch
             local tAttachPoints = worldAPI.CameraAttachPoint:GetAllPointData(trainID, "TrackCarFrontBumperCamera")
             local localOffset = Vector3.Zero

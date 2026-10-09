@@ -36,6 +36,21 @@ local ForceOverlay = require("protrack.ui.forceoverlay")
 local UnitConversion = require("Helpers.UnitConversion")
 
 local logger = require("forgeutils.logger").Get("ProTrackManager", "INFO")
+local Diag = require("protrack.diagnostics")
+
+-- Profile mode is optional: if it fails, ProTrack keeps working and the error is shown in the panel.
+---@type ProfileMode?
+local ProfileMode = nil
+local profileError = nil
+do
+    local ok, result = global.pcall(require, "protrack.modes.profilemode")
+    if ok then
+        ProfileMode = result
+    else
+        profileError = global.tostring(result)
+        Diag.Log("ERROR", "Profile mode failed to load: " .. profileError)
+    end
+end
 
 --/ Main class definition
 ---@class protrackManager
@@ -81,6 +96,7 @@ protrackManager.staticSelf = nil
 local NORMAL_TRACKMODE = 0
 local FVD_TRACKMODE = 1
 local ADVMOVE_TRACKMODE = 2
+local PROFILE_TRACKMODE = 3
 
 ---Sets a value on an object, while also setting to the datastore
 ---@param name any
@@ -97,26 +113,78 @@ local function SetVariableWithDatastore(name, value)
     SetVariableOnObjectWithDatastore(protrackManager, name, value)
 end
 
+---Calls a Profile mode function. On error, Profile mode is turned off,
+---the error is shown in the panel, and the rest of ProTrack carries on.
+---@param functionName string
+---@return any
+local function CallProfile(functionName, ...)
+    if ProfileMode == nil then
+        return nil
+    end
+
+    local ok, result = global.pcall(ProfileMode[functionName], ...)
+    if ok then
+        return result
+    end
+
+    ProfileMode = nil
+    profileError = functionName .. ": " .. global.tostring(result)
+    Diag.Log("ERROR", "Profile mode stopped: " .. profileError)
+    if protrackManager.context ~= nil then
+        api.ui2.SetDataStoreElement(protrackManager.context, "profileError", profileError)
+    end
+    return nil
+end
+
+---Removes the editor widgets that the current track mode replaces.
+---@param _tItems table
+local function HideEditorWidgets(_tItems)
+    local self = protrackManager.staticSelf
+    if self.trackEditMode == nil or not self.editingTrackEnd then
+        return
+    end
+
+    if (self.trackMode == FVD_TRACKMODE) and Datastore.HasData() then -- forcelock, remove 1 and 3
+        _tItems[1] = {}
+        _tItems[3] = {}
+    elseif (self.trackMode == ADVMOVE_TRACKMODE) then -- Advanced widget, remove all
+        _tItems[1] = {}
+        _tItems[2] = {}
+        _tItems[3] = {}
+        _tItems[4] = {}
+    elseif (self.trackMode == PROFILE_TRACKMODE) and ProfileMode ~= nil
+        and (Datastore.HasData() or ProfileMode.locked) then -- profile drives the piece, remove all
+        _tItems[1] = {}
+        _tItems[2] = {}
+        _tItems[3] = {}
+        _tItems[4] = {}
+    end
+end
+
+---Returns the end point the current track mode wants, or nil for the game's own.
+---@return any
+local function BuildEndPoint(originalMethod, startT, tData)
+    local self = protrackManager.staticSelf
+    if (self.trackMode == FVD_TRACKMODE) then
+        return FvdMode.StaticBuildEndPoint_Hook(originalMethod, startT, tData)
+    elseif (self.trackMode == ADVMOVE_TRACKMODE) then
+        return AdvMoveMode.StaticBuildEndPoint_Hook(originalMethod, startT, tData)
+    elseif (self.trackMode == PROFILE_TRACKMODE) and self:IsAddingAfterSelection() then
+        return CallProfile("StaticBuildEndPoint_Hook", originalMethod, startT, tData)
+    end
+    return nil
+end
+
+-- Every hook is guarded: a Lua error inside ProTrack is logged in the panel
+-- (Diagnostics tab) and the game's own code still runs, instead of crashing the game.
 function protrackManager.SetupHooks()
+    Diag.Install()
     logger:Info("Setup FU hooks")
     HookManager:AddHook(
         "UI.CoasterWidgetsUI",
         "SetWidgets",
         function(originalMethod, slf, _tItems)
-            if protrackManager.staticSelf.trackEditMode == nil or not protrackManager.staticSelf.editingTrackEnd then
-                originalMethod(slf, _tItems)
-                return
-            end
-
-            if (protrackManager.staticSelf.trackMode == FVD_TRACKMODE) and Datastore.HasData() then -- forcelock, remove 1 and 3
-                _tItems[1] = {}
-                _tItems[3] = {}
-            elseif (protrackManager.staticSelf.trackMode == ADVMOVE_TRACKMODE) then -- Advanced widget, remove all
-                _tItems[1] = {}
-                _tItems[2] = {}
-                _tItems[3] = {}
-                _tItems[4] = {}
-            end
+            Diag.Guard("Hide editor widgets", HideEditorWidgets, _tItems)
             originalMethod(slf, _tItems)
         end
     )
@@ -126,10 +194,9 @@ function protrackManager.SetupHooks()
         "Editors.Track.TrackEditValues",
         "StaticBuildEndPoint",
         function(originalMethod, startT, tData)
-            if (protrackManager.staticSelf.trackMode == FVD_TRACKMODE) then
-                return FvdMode.StaticBuildEndPoint_Hook(originalMethod, startT, tData)
-            elseif (protrackManager.staticSelf.trackMode == ADVMOVE_TRACKMODE) then
-                return AdvMoveMode.StaticBuildEndPoint_Hook(originalMethod, startT, tData)
+            local ok, joinPoint = Diag.Guard("Build end point", BuildEndPoint, originalMethod, startT, tData)
+            if ok and joinPoint ~= nil then
+                return joinPoint
             end
             return originalMethod(startT, tData)
         end
@@ -140,7 +207,7 @@ function protrackManager.SetupHooks()
         "TransitionIn",
         function(originalMethod, slf, _startTrack, _startSelection, _bDontRequestTrainRespawn)
             originalMethod(slf, _startTrack, _startSelection, _bDontRequestTrainRespawn)
-            protrackManager.staticSelf:StartEditMode(slf)
+            Diag.Guard("Start edit mode", protrackManager.staticSelf.StartEditMode, protrackManager.staticSelf, slf)
         end
     )
 
@@ -149,7 +216,7 @@ function protrackManager.SetupHooks()
         "Shutdown",
         function(originalMethod, slf)
             originalMethod(slf)
-            protrackManager.staticSelf:EndEditMode()
+            Diag.Guard("End edit mode", protrackManager.staticSelf.EndEditMode, protrackManager.staticSelf)
         end
     )
 
@@ -158,7 +225,12 @@ function protrackManager.SetupHooks()
         "CommitPreview",
         function(originalMethod, slf)
             local ret = originalMethod(slf)
-            protrackManager.staticSelf:NewWalk()
+            Diag.Guard("After placing a piece", function()
+                protrackManager.staticSelf:NewWalk()
+                if protrackManager.staticSelf.trackMode == PROFILE_TRACKMODE then
+                    CallProfile("OnCommit")
+                end
+            end)
             return ret
         end
     )
@@ -190,7 +262,11 @@ end
 function protrackManager.Activate(self)
     -- Activate datastore context, this is essential for UI integration
     protrackManager.context = api.ui2.GetDataStoreContext("ProTrack")
+    Diag.SetContext(protrackManager.context)
+    Diag.Guard("Activate", protrackManager.ActivateProTrack, self)
+end
 
+function protrackManager.ActivateProTrack(self)
     -- Our entry point simply calls inject on the submode override file:
     logger:Info("Completing spawns...")
     Cam.GetPreviewCameraEntity()
@@ -199,6 +275,10 @@ function protrackManager.Activate(self)
     local line = require("protrack.gizmo.displayline")
     self.line = line:new()
     FvdMode.line = line:new()
+    CallProfile("Init", protrackManager.context)
+    if profileError ~= nil then
+        api.ui2.SetDataStoreElement(protrackManager.context, "profileError", profileError)
+    end
 
     logger:Info("Initialising UI")
     SetVariableWithDatastore(false, "cameraIsHeartlineMode")
@@ -213,14 +293,14 @@ function protrackManager.Activate(self)
 
             protrackManager.overlayUI:AddListener_ReanchorRequested(
                 function()
-                    self:NewTrainPosition()
+                    self:Anchor()
                 end,
                 nil
             )
 
             protrackManager.overlayUI:AddListener_ResimulateRequested(
                 function()
-                    self:NewWalk()
+                    self:Resimulate()
                 end,
                 nil
             )
@@ -293,6 +373,55 @@ function protrackManager.Activate(self)
                 end,
                 nil
             );
+
+            -- Profile mode listeners
+
+            if ProfileMode ~= nil then
+                for _, settingName in global.ipairs(ProfileMode.SETTINGS) do
+                    protrackManager.overlayUI:AddListener_ProfileSettingChanged(
+                        settingName,
+                        function(newVal)
+                            CallProfile("SetSetting", settingName, newVal)
+                            self:SetTrackBuilderDirty()
+                        end,
+                        nil
+                    );
+                end
+            end
+
+            protrackManager.overlayUI:AddListener_ProfileCancelRequested(
+                function()
+                    -- Handled in Advance to exit the UI thread.
+                    if ProfileMode ~= nil then
+                        ProfileMode.cancelRequested = true
+                    end
+                end,
+                nil
+            );
+
+            -- Diagnostics listeners
+
+            protrackManager.overlayUI:AddListener_DiagStepModeChanged(
+                function(stepMode)
+                    Diag.SetStepMode(stepMode)
+                end,
+                nil
+            );
+
+            protrackManager.overlayUI:AddListener_DiagFileLogRequested(
+                function()
+                    -- Handled in Advance to exit the UI thread.
+                    Diag.RequestFileLog()
+                end,
+                nil
+            );
+
+            protrackManager.overlayUI:AddListener_DiagClearRequested(
+                function()
+                    Diag.Clear()
+                end,
+                nil
+            );
         end
     )
 end
@@ -306,6 +435,7 @@ function protrackManager.ZeroData(self)
     self.tWorldAPIs = nil
     self.inputManagerAPI = nil
     Datastore.datapoints = nil
+    CallProfile("ResetSection")
 
     -- Datastore updates
     SetVariableWithDatastore("playingInDir", 0)
@@ -340,7 +470,7 @@ function protrackManager.StartEditMode(self, trackEditMode)
     self.inputEventHandler:AddKeyPressedEvent(
         "RotateObject",
         function()
-            self:NewTrainPosition()
+            self:Anchor()
             return true
         end
     )
@@ -351,7 +481,7 @@ function protrackManager.StartEditMode(self, trackEditMode)
             if self.trackMode == ADVMOVE_TRACKMODE and self.editingTrackEnd then
                 AdvMoveMode.SwitchTransformMode()
             else
-                self:NewWalk()
+                self:Resimulate()
             end
 
             return true
@@ -395,6 +525,7 @@ function protrackManager.StartEditMode(self, trackEditMode)
     for _, gizmo in global.ipairs(self.followerGizmos) do
         gizmo:SetVisible(false)
     end
+    CallProfile("SpawnMarkers")
 
     self.referencePointGizmo = TrackReferenceGizmo.new()
     self.referencePointGizmo:SetVisible(false)
@@ -445,10 +576,14 @@ function protrackManager.EndEditMode(self)
         shutdownGizmo(gizmo)
     end
     self.followerGizmos = nil
+    CallProfile("ShutdownMarkers")
 end
 
 function protrackManager.SwitchTrackMode(self, newTrackMode)
     self:EndTrackEdit()
+    if self.trackMode == PROFILE_TRACKMODE then
+        CallProfile("ResetSection")
+    end
     SetVariableWithDatastore("trackMode", newTrackMode)
     self:StartTrackEdit()
     self:SetTrackBuilderDirty()
@@ -457,6 +592,8 @@ end
 function protrackManager.StartTrackEdit(self)
     if self.trackMode == ADVMOVE_TRACKMODE then
         AdvMoveMode.StartEdit(self.draggableWidget, Datastore.trackEntityTransform)
+    elseif self.trackMode == PROFILE_TRACKMODE then
+        CallProfile("StartEdit")
     end
 end
 
@@ -465,7 +602,17 @@ function protrackManager.EndTrackEdit(self)
         FvdMode.EndEdit()
     elseif self.trackMode == ADVMOVE_TRACKMODE then
         AdvMoveMode.EndEdit()
+    elseif self.trackMode == PROFILE_TRACKMODE then
+        CallProfile("EndEdit")
     end
+end
+
+--- Returns whether the editor is adding a piece after the selection.
+---@return boolean
+function protrackManager.IsAddingAfterSelection(self)
+    return self.trackEditMode ~= nil
+        and self.trackEditMode.tActiveData ~= nil
+        and self.trackEditMode.tActiveData:IsAddingAfterSelection()
 end
 
 function protrackManager.SetTrackBuilderDirty(self)
@@ -475,23 +622,42 @@ function protrackManager.SetTrackBuilderDirty(self)
     end
 end
 
+--- Anchors on the train (button or keybind), step by step in step-by-step mode.
+function protrackManager.Anchor(self)
+    Diag.Run("Anchor", function()
+        self:NewTrainPosition()
+    end)
+end
+
+--- Re-runs the simulation from the current anchor.
+function protrackManager.Resimulate(self)
+    Diag.Run("Resimulate", function()
+        self:NewWalk()
+    end)
+end
+
 function protrackManager.NewTrainPosition(self)
     local trackEntity = self.trackEditMode.tActiveData:GetTrackEntity()
 
     -- Early exit
+    Diag.Step("Anchor: find the train")
     Datastore.trackWalkerOrigin = Utils.GetFirstCarData(trackEntity)
     if Datastore.trackWalkerOrigin == nil then
+        Diag.Log("INFO", "Anchor: no train found on the track")
         return
     end
 
     if mathUtils.ApproxEquals(Datastore.trackWalkerOrigin.speed, 0) then
+        Diag.Log("INFO", "Anchor: the train is not moving")
         return
     end
 
     -- set dt to 0 since we are moving refpoint
     self.simulationTime = 0
     self:NewWalk()
+    Diag.Step("Anchor: refresh the track editor")
     self:SetTrackBuilderDirty()
+    Diag.Step("Anchor: live display (gizmos, camera, readouts) starts next frame")
 end
 
 function protrackManager.ClearWalkerOrigin(self)
@@ -526,6 +692,7 @@ function protrackManager.NewWalk(self)
         [2] = -halfLength
     }
 
+    Diag.Step("Walk: simulate the ride (train length " .. global.tostring(Datastore.trackWalkerOrigin.trainLength) .. " m)")
     Datastore.datapoints = Utils.WalkTrack(
         Datastore.trackWalkerOrigin,
         self.distances,
@@ -538,11 +705,12 @@ function protrackManager.NewWalk(self)
     -- Need to clear everything
 
     if not Datastore.HasData() then
+        Diag.Log("INFO", "Walk: not enough data from the simulation")
         self:ClearWalkerOrigin()
         return
     end
 
-    logger:Info("Line?")
+    Diag.Step("Walk: draw the line (" .. #Datastore.datapoints .. " samples)")
     -- Set points
     local tPoints = {}
     for i, datapoint in global.ipairs(Datastore.datapoints) do
@@ -560,9 +728,11 @@ function protrackManager.NewWalk(self)
     end
 
     -- Turn it on
+    Diag.Step("Walk: show the train gizmos")
     for _, gizmo in global.ipairs(self.followerGizmos) do
         gizmo:SetVisible(true)
     end
+    Diag.Step("Walk: show the reference gizmos")
     self.referencePointGizmo:SetVisible(not self.inCamera)
 
     self.referencePointGizmo:SetRefPointTransform(
@@ -605,6 +775,11 @@ function protrackManager.StopTrackCamera(self)
 end
 
 function protrackManager.Advance(self, deltaTime)
+    Diag.Guard("Advance", protrackManager.AdvanceProTrack, self, deltaTime)
+    Diag.Advance()
+end
+
+function protrackManager.AdvanceProTrack(self, deltaTime)
     if self.inputEventHandler == nil or self.inputManagerAPI == nil then
         return
     end
@@ -637,6 +812,13 @@ function protrackManager.Advance(self, deltaTime)
         end
     end
 
+    -- If we are in profile mode, tick it.
+    if (self.trackMode == PROFILE_TRACKMODE) then
+        if CallProfile("Advance") then
+            self:SetTrackBuilderDirty()
+        end
+    end
+
     -- If a change has happened, we want to know!
     if (self.trackEditMode:HasRequestedChange()) then
         self:NewWalk()
@@ -662,7 +844,8 @@ function protrackManager.Advance(self, deltaTime)
     local hasData = Datastore.HasData()
     api.ui2.SetDataStoreElement(protrackManager.context, "hasData", hasData)
 
-    if hasData then
+    -- While a step-by-step action runs, the live display waits for it to finish.
+    if hasData and not Diag.IsRunning() then
         if Datastore.trackWalkerOrigin == nil or Datastore.trackEntityTransform == nil then
             self:ClearWalkerOrigin()
             return

@@ -9,14 +9,62 @@
     pointer-events: none;
 }
 
+/* Placed by the dock around it */
 .ProTrackUI_panel {
     width: 50rem;
-    justify-self: center;
-    align-self: center;
     display: flex;
-    position: fixed;
-    top: 2.5rem;
+    position: relative;
+    top: 0;
+    left: 0;
+    right: auto;
+    bottom: auto;
+    margin: 0;
     pointer-events: none;
+}
+
+/* Panel position, changed with the Move button */
+.ProTrackUI_dock {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    width: 50rem;
+    pointer-events: none;
+}
+
+/* No top right: the game's editor menu is there */
+.ProTrackUI_dock_topCentre {
+    top: 2.5rem;
+    left: 50%;
+    margin-left: -25rem;
+}
+
+/* Bottom: above the game's footer bar (about 2 panel rows) */
+.ProTrackUI_dock_bottomRight {
+    bottom: 5.2rem;
+    right: 1rem;
+}
+
+.ProTrackUI_dock_bottomLeft {
+    bottom: 5.2rem;
+    left: 1rem;
+}
+
+/* Top left: right of the game's menu icons (about one toolbar button) */
+.ProTrackUI_dock_topLeft {
+    top: 2.5rem;
+    left: 5.9rem;
+}
+
+.ProTrackUI_toolbar {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    padding-bottom: 0.25rem;
+}
+
+/* The toolbar is outside the panel: only its buttons take clicks, the rest of the strip lets them through to the park */
+.ProTrackUI_toolbar>* {
+    pointer-events: auto;
 }
 
 .ProTrackUI_panelInner {
@@ -52,6 +100,18 @@
     flex: 1;
     flex-basis: 0%;
     min-width: 0;
+}
+
+/* Side by side controls: equal widths, the control stretched to fill its cell */
+.ProTrackUI_cell {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin-right: 0.75rem;
+}
+
+.ProTrackUI_cell:last-child {
+    margin-right: 0;
 }
 
 .ProTrackUI_distributeRow {
@@ -90,4 +150,62 @@
     grid-template-columns: repeat(4, 1fr);
     gap: 1rem;
     width: 100%;
+}
+
+.ProTrackUI_log {
+    max-height: 22rem;
+    overflow-y: auto;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.6);
+    pointer-events: auto;
+}
+
+.ProTrackUI_logLine {
+    color: rgb(230, 230, 230);
+    font-size: 0.8rem;
+    line-height: 1.2rem;
+}
+
+.ProTrackUI_logStatus {
+    color: rgb(230, 230, 230);
+    font-size: 0.9rem;
+}
+
+/* Profile mode one-line info bar, in a row so it is as wide as the other rows' contents */
+.ProTrackUI_infoRow {
+    display: flex;
+    flex-direction: row;
+}
+
+.ProTrackUI_infoBar {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.45);
+}
+
+.ProTrackUI_infoBar>* {
+    margin-right: 0.5rem;
+}
+
+.ProTrackUI_infoBar>*:last-child {
+    margin-right: 0;
+}
+
+.ProTrackUI_infoText {
+    color: rgb(230, 230, 230);
+    font-size: 0.85rem;
+    line-height: 1.2rem;
+}
+
+.ProTrackUI_infoWarn {
+    color: rgb(255, 190, 70);
+}
+
+.ProTrackUI_infoSpacer {
+    flex: 1;
 }

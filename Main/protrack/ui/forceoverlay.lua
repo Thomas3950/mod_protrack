@@ -14,6 +14,17 @@ local GamefaceUIWrapper = require("UI.GamefaceUIWrapper")
 local table             = require("Common.tableplus")
 
 local logger            = require("forgeutils.logger").Get("ProTrackForceOverlay")
+local Diag              = require("protrack.diagnostics")
+
+---Listens to a UI event. The callback is guarded: a Lua error in it is logged
+---in the Diagnostics tab instead of crashing the game.
+local function Listen(overlay, eventName, _callback, _self)
+	---@diagnostic disable-next-line: undefined-field
+	overlay:AddEventListener(eventName, 1, function(...)
+		Diag.Guard("UI " .. eventName, _callback, ...)
+	end, _self)
+end
+
 ---@class ForceOverlay
 local ForceOverlay      = module(..., Object.subclass(GamefaceUIWrapper))
 local ObjectNew         = ForceOverlay.new
@@ -39,55 +50,69 @@ end
 -- Button responders
 
 function ForceOverlay:AddListener_ReanchorRequested(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("Protrack_ReanchorRequested", 1, _callback, _self)
+	Listen(self, "Protrack_ReanchorRequested", _callback, _self)
 end
 
 function ForceOverlay:AddListener_ResimulateRequested(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("Protrack_ResimulateRequested", 1, _callback, _self)
+	Listen(self, "Protrack_ResimulateRequested", _callback, _self)
 end
 
 function ForceOverlay:AddListener_ChangeCamModeRequested(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("Protrack_ChangeCamModeRequested", 1, _callback, _self)
+	Listen(self, "Protrack_ChangeCamModeRequested", _callback, _self)
 end
 
 -- Value change listeners
 
 function ForceOverlay:AddListener_HeartlineValueChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("ProtrackHeartlineChanged", 1, _callback, _self)
+	Listen(self, "ProtrackHeartlineChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_VertGValueChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("ProtrackVertGChanged", 1, _callback, _self)
+	Listen(self, "ProtrackVertGChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_LatGValueChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("ProtrackLatGChanged", 1, _callback, _self)
+	Listen(self, "ProtrackLatGChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_TrackModeChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("ProtrackTrackModeChanged", 1, _callback, _self)
+	Listen(self, "ProtrackTrackModeChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_HeartlineCamChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("ProtrackHeartlineCamChanged", 1, _callback, _self)
+	Listen(self, "ProtrackHeartlineCamChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_TimeChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("Protrack_TimeChanged", 1, _callback, _self)
+	Listen(self, "Protrack_TimeChanged", _callback, _self)
 end
 
 function ForceOverlay:AddListener_PlayChanged(_callback, _self)
-	---@diagnostic disable-next-line: undefined-field
-	self:AddEventListener("Protrack_PlayChanged", 1, _callback, _self)
+	Listen(self, "Protrack_PlayChanged", _callback, _self)
+end
+
+-- Profile mode
+
+function ForceOverlay:AddListener_ProfileSettingChanged(_settingName, _callback, _self)
+	Listen(self, "ProtrackProfileSettingChanged_" .. _settingName, _callback, _self)
+end
+
+function ForceOverlay:AddListener_ProfileCancelRequested(_callback, _self)
+	Listen(self, "Protrack_ProfileCancelRequested", _callback, _self)
+end
+
+-- Diagnostics
+
+function ForceOverlay:AddListener_DiagStepModeChanged(_callback, _self)
+	Listen(self, "Protrack_DiagStepModeChanged", _callback, _self)
+end
+
+function ForceOverlay:AddListener_DiagFileLogRequested(_callback, _self)
+	Listen(self, "Protrack_DiagFileLogRequested", _callback, _self)
+end
+
+function ForceOverlay:AddListener_DiagClearRequested(_callback, _self)
+	Listen(self, "Protrack_DiagClearRequested", _callback, _self)
 end
 
 function ForceOverlay:Show()

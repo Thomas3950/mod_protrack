@@ -14,6 +14,7 @@ function Line.new()
     self.guiDrawing = nil
     self.guiVisual  = 6
     self.tPoints    = {}
+    self.tSegments  = {}
     self.volumesAPI = api.world.GetWorldAPIs().volumes
     self.guiShape   = self.volumesAPI:CreateDrawingShape()
     self.guiDrawing = self.volumesAPI:AllocDrawingID(self.guiShape)
@@ -24,6 +25,11 @@ function Line:SetPoints(tPoints)
     self.tPoints = tPoints
 end
 
+-- Separate lines drawn with the points, as {vStart, vEnd} pairs
+function Line:SetSegments(tSegments)
+    self.tSegments = tSegments
+end
+
 function Line:DrawPoints()
     self:ClearPoints()
     self.volumesAPI:BeginDrawing(self.guiShape, self.guiDrawing)
@@ -32,6 +38,11 @@ function Line:DrawPoints()
         local vStart = self.tPoints[i - 1]
         local vEnd   = self.tPoints[i]
         self.volumesAPI:AddDrawingLine(self.guiShape, vStart, vEnd, self.guiVisual)
+    end
+
+    for i = 1, #self.tSegments do
+        local tSegment = self.tSegments[i]
+        self.volumesAPI:AddDrawingLine(self.guiShape, tSegment[1], tSegment[2], self.guiVisual)
     end
 
     self.volumesAPI:EndDrawing(self.guiShape, self.guiDrawing)
